@@ -41,6 +41,8 @@ struct App {
     interval: Duration,
     last_tick: Instant,
     should_quit: bool,
+    input_mode: bool,  // Whether in input mode
+    input_buffer: String, // Buffer for new pattern input
 }
 
 impl App {
@@ -51,7 +53,19 @@ impl App {
             interval: Duration::from_secs(interval),
             last_tick: Instant::now(),
             should_quit: false,
+            input_mode: false,
+            input_buffer: String::new(),
         }
+    }
+
+    fn add_pattern(&mut self, pattern: &str) {
+        if let Ok(regex) = Regex::new(pattern) {
+            self.patterns.push(regex);
+        }
+    }
+
+    fn remove_pattern(&mut self, pattern: &str) {
+        self.patterns.retain(|p| p.as_str() != pattern);
     }
 
     fn update(&mut self, sys: &mut System, last_cpu_values: &mut HashMap<Pid, f32>) {
@@ -113,15 +127,23 @@ fn ui(frame: &mut Frame, app: &App) {
         .split(frame.size());
 
     // Title
-    let title = Paragraph::new(format!(
-        "Process Monitor - Watching patterns: {}",
-        app.patterns
-            .iter()
-            .map(|p| p.to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    ))
-    .block(Block::default().borders(Borders::ALL));
+    let title_text = if app.input_mode {
+        format!(
+            "Process Monitor - Adding pattern: {}_",
+            app.input_buffer
+        )
+    } else {
+        format!(
+            "Process Monitor - Watching patterns: {} (a:add, d:delete last, q:quit)",
+            app.patterns
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    let title = Paragraph::new(title_text)
+        .block(Block::default().borders(Borders::ALL));
     frame.render_widget(title, main_layout[0]);
 
     // Process table
@@ -183,13 +205,45 @@ fn run(args: Args) -> Result<()> {
 
         if event::poll(Duration::from_millis(250))? {
             if let Event::Key(key) = event::read()? {
-                match (key.code, key.modifiers) {
-                    (KeyCode::Char('c'), KeyModifiers::CONTROL)
-                    | (KeyCode::Char('q'), _)
-                    | (KeyCode::Esc, _) => {
-                        app.should_quit = true;
+                if app.input_mode {
+                    match key.code {
+                        KeyCode::Char(c) => {
+                            app.input_buffer.push(c);
+                        }
+                        KeyCode::Backspace => {
+                            app.input_buffer.pop();
+                        }
+                        KeyCode::Enter => {
+                            if !app.input_buffer.is_empty() {
+                                app.add_pattern(&app.input_buffer);
+                                app.input_buffer.clear();
+                            }
+                            app.input_mode = false;
+                        }
+                        KeyCode::Esc => {
+                            app.input_buffer.clear();
+                            app.input_mode = false;
+                        }
+                        _ => {}
                     }
-                    _ => {}
+                } else {
+                    match (key.code, key.modifiers) {
+                        (KeyCode::Char('c'), KeyModifiers::CONTROL)
+                        | (KeyCode::Char('q'), _)
+                        | (KeyCode::Esc, _) => {
+                            app.should_quit = true;
+                        }
+                        (KeyCode::Char('a'), _) => {
+                            app.input_mode = true;
+                        }
+                        (KeyCode::Char('d'), _) => {
+                            if let Some(last_pattern) = app.patterns.last() {
+                                let pattern = last_pattern.as_str().to_string();
+                                app.remove_pattern(&pattern);
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
         }
