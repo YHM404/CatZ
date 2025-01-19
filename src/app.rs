@@ -4,22 +4,28 @@ use std::{
 };
 use sysinfo::{Pid, System};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Normal,
+    InputPattern,
+    SelectProcess,
+    Stats,
+    SavePrompt,
+}
+
 pub struct App {
-    pub processes: Vec<(String, Pid, f32, f64)>, // name, pid, cpu%, memory(MB)
+    pub processes: Vec<(String, Pid, f32, f64)>,
     pub interval: Duration,
     pub last_tick: Instant,
     pub should_quit: bool,
-    pub input_mode: bool,                                // Whether in input mode
-    pub input_buffer: String,                            // Buffer for new pattern input
-    pub stats_mode: bool,                                // Whether in statistics mode
-    pub stats_data: Vec<(String, Vec<(f32, Pid, f64)>)>, // Process stats: name -> (cpu%, pid, memory) history
-    pub save_prompt: bool,                               // Whether showing save prompt
-    pub save_filename: String,                           // Buffer for save filename
-    pub select_mode: bool,                               // Whether in process selection mode
-    pub candidate_processes: Vec<String>,                // Processes matching new pattern
-    pub selected_process: usize,                         // Currently selected process index
-    pub monitored_processes: Vec<(String, Pid)>, // Currently monitored processes (name, pid)
-    pub selected_monitored_process: usize,       // Currently selected monitored process
+    pub mode: Mode,
+    pub input_buffer: String,
+    pub stats_data: Vec<(String, Vec<(f32, Pid, f64)>)>,
+    pub save_filename: String,
+    pub candidate_processes: Vec<String>,
+    pub selected_process: usize,
+    pub monitored_processes: Vec<(String, Pid)>,
+    pub selected_monitored_process: usize,
 }
 
 impl App {
@@ -29,13 +35,10 @@ impl App {
             interval: Duration::from_secs(interval),
             last_tick: Instant::now(),
             should_quit: false,
-            input_mode: false,
+            mode: Mode::Normal,
             input_buffer: String::new(),
-            stats_mode: false,
             stats_data: Vec::new(),
-            save_prompt: false,
             save_filename: String::new(),
-            select_mode: false,
             candidate_processes: Vec::new(),
             selected_process: 0,
             monitored_processes: Vec::new(),
@@ -58,31 +61,27 @@ impl App {
             .collect();
 
         if !candidates.is_empty() {
-            // Store candidates and their PIDs
             self.candidate_processes = candidates.iter().map(|(_, name)| name.clone()).collect();
-            self.select_mode = true;
+            self.mode = Mode::SelectProcess;
             self.selected_process = 0;
             self.input_buffer = pattern;
         }
     }
 
     pub fn confirm_selection(&mut self, sys: &System) {
-        if self.select_mode {
-            // Get the selected process's PID
-            let selected_name = &self.candidate_processes[self.selected_process];
-            if let Some((pid, _)) = sys
-                .processes()
-                .iter()
-                .find(|(_, process)| process.name() == selected_name)
-            {
-                // Add to monitored processes
-                self.monitored_processes.push((selected_name.clone(), *pid));
-            }
-            self.select_mode = false;
-            self.input_mode = false;
-            self.input_buffer.clear();
-            self.candidate_processes.clear();
+        // Get the selected process's PID
+        let selected_name = &self.candidate_processes[self.selected_process];
+        if let Some((pid, _)) = sys
+            .processes()
+            .iter()
+            .find(|(_, process)| process.name() == selected_name)
+        {
+            // Add to monitored processes
+            self.monitored_processes.push((selected_name.clone(), *pid));
         }
+        self.mode = Mode::Normal;
+        self.input_buffer.clear();
+        self.candidate_processes.clear();
     }
 
     pub fn update(&mut self, sys: &mut System, last_cpu_values: &mut HashMap<Pid, f32>) {
@@ -115,7 +114,7 @@ impl App {
             .collect();
 
         // Update statistics if in stats mode
-        if self.stats_mode {
+        if self.mode == Mode::Stats {
             for (name, pid, cpu, mem) in &self.processes {
                 if let Some(entry) = self.stats_data.iter_mut().find(|e| e.0 == *name) {
                     entry.1.push((*cpu, *pid, *mem));
@@ -156,8 +155,7 @@ impl App {
     }
 
     pub fn cancel_input(&mut self) {
-        self.input_mode = false;
-        self.select_mode = false;
+        self.mode = Mode::Normal;
         self.input_buffer.clear();
         self.candidate_processes.clear();
     }
